@@ -127,3 +127,21 @@ Uses `nexus-testsupport` base classes and Mockito for mocking Nexus internals.
 ### Plugin deployment
 
 - The plugin JAR is deployed to Nexus by copying it into `$NEXUS_HOME/deploy/`. Nexus picks it up automatically via OSGi hot-deploy on startup. No restart manager config or Karaf console commands are needed.
+
+## Reference Documentation
+
+### Nexus plugin development
+
+- [Format Plugin Development Guide](https://github.com/sonatype-nexus-community/nexus-development-guides/blob/master/docs/format-plugin.md) — step-by-step walkthrough of building a format plugin (recipes, handlers, facets, routes)
+- [Format Plugin Archetype](https://github.com/sonatype-nexus-community/nexus-format-archetype) — Maven archetype to scaffold a new format plugin project
+- [Installing a Custom Plugin](https://sonatype-nexus-community.github.io/nexus-development-guides/plugin-install.html) — deploy directory, Karaf console, and permanent install methods
+- [Nexus Public Source Code](https://github.com/sonatype/nexus-public) — Nexus Repository Manager open-source codebase (the APIs this plugin builds against)
+
+### Example format plugins (community)
+
+- [nexus-repository-composer](https://github.com/sonatype-nexus-community/nexus-repository-composer) — Composer format plugin, good reference for hosted + proxy recipes
+- [nexus-repository-puppet](https://github.com/sonatype-nexus-community/nexus-repository-puppet) — Puppet format plugin
+
+### Nexus REST API
+
+- [Nexus Repository REST API](https://help.sonatype.com/en/rest-and-integration-api.html) — official API docs for repository management, assets, components, and search
