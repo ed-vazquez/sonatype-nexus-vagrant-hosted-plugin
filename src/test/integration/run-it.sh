@@ -21,15 +21,33 @@ MAX_WAIT=120
 PASSED=0
 FAILED=0
 
+section_open() {
+  if [ "${CI:-}" = "true" ]; then
+    echo "::group::$1"
+  else
+    echo ""
+    echo "=== $1 ==="
+  fi
+}
+
+section_close() {
+  if [ "${CI:-}" = "true" ]; then
+    echo "::endgroup::"
+  fi
+}
+
 cleanup() {
-  echo ""
-  echo "=== Cleanup ==="
+  section_open "Cleanup"
   docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+  section_close
 }
 trap cleanup EXIT
 
 fail() {
   echo "  FAIL: $1"
+  if [ "${CI:-}" = "true" ]; then
+    echo "::error::$1"
+  fi
   FAILED=$((FAILED + 1))
 }
 
@@ -47,10 +65,7 @@ assert_status() {
   fi
 }
 
-# -------------------------------------------------------
-# Step 1: Build the plugin
-# -------------------------------------------------------
-echo "=== Building plugin ==="
+section_open "Building plugin"
 docker run --rm \
   -v "$PROJECT_DIR":/build -w /build \
   maven:3.9-eclipse-temurin-17 \
@@ -62,20 +77,15 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 echo "Plugin JAR built: $(basename "$JAR")"
+section_close
 
-# -------------------------------------------------------
-# Step 2: Start Nexus with plugin in the deploy directory
-# -------------------------------------------------------
-echo "=== Starting Nexus container ==="
+section_open "Starting Nexus container"
 docker run -d \
   --name "$CONTAINER_NAME" \
   -p "$NEXUS_PORT:8081" \
   -v "$JAR:/opt/sonatype/nexus/deploy/nexus-repository-vagrant-1.0.0-SNAPSHOT.jar:ro" \
   "sonatype/nexus3:$NEXUS_VERSION"
 
-# -------------------------------------------------------
-# Step 3: Wait for Nexus to become ready
-# -------------------------------------------------------
 echo "Waiting for Nexus to start (up to ${MAX_WAIT}s)..."
 ELAPSED=0
 until curl -sf "http://localhost:$NEXUS_PORT/service/rest/v1/status" >/dev/null 2>&1; do
@@ -93,12 +103,9 @@ echo "Nexus is ready."
 # Get admin password
 ADMIN_PASS=$(docker exec "$CONTAINER_NAME" cat /nexus-data/admin.password 2>/dev/null || echo "admin123")
 AUTH="admin:$ADMIN_PASS"
+section_close
 
-# -------------------------------------------------------
-# Step 5: Create a vagrant-hosted repository
-# -------------------------------------------------------
-echo ""
-echo "=== Creating vagrant-hosted repository ==="
+section_open "Creating vagrant-hosted repository"
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   -u "$AUTH" \
   -X POST "http://localhost:$NEXUS_PORT/service/rest/v1/repositories/vagrant/hosted" \
@@ -117,29 +124,23 @@ if [ "$HTTP_CODE" -eq 201 ] || [ "$HTTP_CODE" -eq 200 ]; then
   pass "Create repository (HTTP $HTTP_CODE)"
 else
   fail "Create repository — HTTP $HTTP_CODE (plugin may not have loaded)"
-  echo ""
-  echo "=== Checking Nexus logs for plugin errors ==="
+  echo "Checking Nexus logs for plugin errors:"
   docker logs "$CONTAINER_NAME" 2>&1 | grep -i -E '(vagrant|ERROR|WARN.*bundle)' | tail -20
+  section_close
   echo ""
   echo "Results: $PASSED passed, $FAILED failed"
   exit 1
 fi
 
 REPO_URL="http://localhost:$NEXUS_PORT/repository/vagrant-test"
+section_close
 
-# -------------------------------------------------------
-# Step 6: Create a dummy .box file
-# -------------------------------------------------------
 DUMMY_BOX=$(mktemp)
 dd if=/dev/urandom bs=1024 count=10 of="$DUMMY_BOX" 2>/dev/null
 BOX_SHA256=$(shasum -a 256 "$DUMMY_BOX" 2>/dev/null || sha256sum "$DUMMY_BOX")
 BOX_SHA256=$(echo "$BOX_SHA256" | awk '{print $1}')
 
-# -------------------------------------------------------
-# Step 7: Upload a box
-# -------------------------------------------------------
-echo ""
-echo "=== Test: Upload box ==="
+section_open "Test: Upload box"
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   -u "$AUTH" \
   -X PUT \
@@ -162,12 +163,9 @@ HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   --upload-file "$DUMMY_BOX" \
   "$REPO_URL/testorg/testbox/2.0.0/virtualbox/testbox.box")
 assert_status 201 "$HTTP_CODE" "PUT testorg/testbox/2.0.0/virtualbox/testbox.box"
+section_close
 
-# -------------------------------------------------------
-# Step 8: Retrieve metadata
-# -------------------------------------------------------
-echo ""
-echo "=== Test: Get metadata ==="
+section_open "Test: Get metadata"
 METADATA_FILE=$(mktemp)
 HTTP_CODE=$(curl -s -o "$METADATA_FILE" -w '%{http_code}' \
   "$REPO_URL/testorg/testbox")
@@ -207,12 +205,9 @@ else:
   echo "  Metadata content:"
   python3 -m json.tool "$METADATA_FILE" 2>/dev/null | sed 's/^/    /'
 fi
+section_close
 
-# -------------------------------------------------------
-# Step 9: Download a box file
-# -------------------------------------------------------
-echo ""
-echo "=== Test: Download box ==="
+section_open "Test: Download box"
 DOWNLOAD_FILE=$(mktemp)
 HTTP_CODE=$(curl -s -o "$DOWNLOAD_FILE" -w '%{http_code}' \
   "$REPO_URL/testorg/testbox/1.0.0/virtualbox/testbox.box")
@@ -225,12 +220,9 @@ if [ "$BOX_SHA256" = "$DOWNLOAD_SHA256" ]; then
 else
   fail "Checksum mismatch: uploaded=$BOX_SHA256 downloaded=$DOWNLOAD_SHA256"
 fi
+section_close
 
-# -------------------------------------------------------
-# Step 10: 404 for nonexistent box
-# -------------------------------------------------------
-echo ""
-echo "=== Test: Not found ==="
+section_open "Test: Not found"
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   "$REPO_URL/testorg/testbox/9.9.9/virtualbox/testbox.box")
 assert_status 404 "$HTTP_CODE" "GET nonexistent version"
@@ -238,12 +230,9 @@ assert_status 404 "$HTTP_CODE" "GET nonexistent version"
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   "$REPO_URL/noorg/nobox")
 assert_status 404 "$HTTP_CODE" "GET nonexistent box metadata"
+section_close
 
-# -------------------------------------------------------
-# Step 11: Delete a box
-# -------------------------------------------------------
-echo ""
-echo "=== Test: Delete box ==="
+section_open "Test: Delete box"
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
   -u "$AUTH" \
   -X DELETE \
@@ -272,18 +261,13 @@ print('2.0.0' not in versions)
     fail "Metadata still includes deleted version 2.0.0"
   fi
 fi
+section_close
 
-# -------------------------------------------------------
-# Vagrant CLI interop tests (only if vagrant is installed)
-# -------------------------------------------------------
 if ! command -v vagrant >/dev/null 2>&1; then
-  echo ""
-  echo "=== Vagrant CLI not found — skipping interop tests ==="
+  section_open "Vagrant CLI not found — skipping interop tests"
+  section_close
 else
-  echo ""
-  echo "######################################################"
-  echo "  Vagrant CLI Interop Tests"
-  echo "######################################################"
+  section_open "Vagrant CLI Interop Tests — Setup"
 
   # Use a temporary VAGRANT_HOME so we don't pollute the user's boxes
   VAGRANT_TEST_HOME=$(mktemp -d)
@@ -301,18 +285,14 @@ VFEOF
   tar -czf "$VALID_BOX" -C "$VALID_BOX_DIR" metadata.json Vagrantfile
 
   # Upload the valid .box as v1.0.0/virtualbox
-  echo ""
-  echo "=== Setup: Upload valid .box v1.0.0 ==="
   HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
     -u "$AUTH" -X PUT --upload-file "$VALID_BOX" \
     "$REPO_URL/cliorg/clibox/1.0.0/virtualbox/clibox.box")
   assert_status 201 "$HTTP_CODE" "Upload cliorg/clibox v1.0.0 for CLI tests"
 
-  # -------------------------------------------------------
-  # Test: vagrant box add from catalog URL
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box add ==="
+  section_close
+
+  section_open "Test: vagrant box add"
   VAGRANT_ADD_OUTPUT=$(vagrant box add "$REPO_URL/cliorg/clibox" \
     --provider virtualbox \
     --force 2>&1) || true
@@ -325,11 +305,9 @@ VFEOF
     fail "vagrant box add did not report success"
   fi
 
-  # -------------------------------------------------------
-  # Test: vagrant box list shows the box
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box list ==="
+  section_close
+
+  section_open "Test: vagrant box list"
   BOX_LIST_OUTPUT=$(vagrant box list 2>&1)
   echo "  vagrant box list output:"
   echo "$BOX_LIST_OUTPUT" | sed 's/^/    /'
@@ -346,11 +324,9 @@ VFEOF
     fail "vagrant box list does not show version 1.0.0"
   fi
 
-  # -------------------------------------------------------
-  # Test: vagrant box outdated (should be up to date)
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box outdated (no update available) ==="
+  section_close
+
+  section_open "Test: vagrant box outdated (no update available)"
   VAGRANTFILE_DIR=$(mktemp -d)
   cat > "$VAGRANTFILE_DIR/Vagrantfile" <<VFEOF
 Vagrant.configure("2") do |config|
@@ -374,21 +350,17 @@ VFEOF
     fail "vagrant box outdated did not report up to date"
   fi
 
-  # -------------------------------------------------------
-  # Upload v2.0.0 and test outdated detection
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Setup: Upload valid .box v2.0.0 ==="
+  section_close
+
+  section_open "Setup: Upload valid .box v2.0.0"
   HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
     -u "$AUTH" -X PUT --upload-file "$VALID_BOX" \
     "$REPO_URL/cliorg/clibox/2.0.0/virtualbox/clibox.box")
   assert_status 201 "$HTTP_CODE" "Upload cliorg/clibox v2.0.0 for CLI tests"
 
-  # -------------------------------------------------------
-  # Test: vagrant box outdated (update available)
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box outdated (update available) ==="
+  section_close
+
+  section_open "Test: vagrant box outdated (update available)"
   OUTDATED_OUTPUT=$(cd "$VAGRANTFILE_DIR" && vagrant box outdated --force 2>&1) || true
   echo "  vagrant box outdated output:"
   echo "$OUTDATED_OUTPUT" | sed 's/^/    /'
@@ -399,11 +371,9 @@ VFEOF
     fail "vagrant box outdated did not detect v2.0.0 update"
   fi
 
-  # -------------------------------------------------------
-  # Test: vagrant box update
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box update ==="
+  section_close
+
+  section_open "Test: vagrant box update"
   UPDATE_OUTPUT=$(cd "$VAGRANTFILE_DIR" && vagrant box update --force 2>&1) || true
   echo "  vagrant box update output:"
   echo "$UPDATE_OUTPUT" | sed 's/^/    /'
@@ -424,11 +394,9 @@ VFEOF
     fail "vagrant box list does not show version 2.0.0 after update"
   fi
 
-  # -------------------------------------------------------
-  # Test: vagrant box add with --box-version constraint
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box add with version constraint ==="
+  section_close
+
+  section_open "Test: vagrant box add with version constraint"
   VAGRANT_VER_OUTPUT=$(vagrant box add "$REPO_URL/cliorg/clibox" \
     --provider virtualbox \
     --box-version "1.0.0" \
@@ -442,11 +410,9 @@ VFEOF
     fail "vagrant box add with version constraint did not succeed"
   fi
 
-  # -------------------------------------------------------
-  # Test: vagrant box remove
-  # -------------------------------------------------------
-  echo ""
-  echo "=== Test: vagrant box remove ==="
+  section_close
+
+  section_open "Test: vagrant box remove"
   REMOVE_OUTPUT=$(vagrant box remove "cliorg/clibox" --all --force 2>&1) || true
   echo "  vagrant box remove output:"
   echo "$REMOVE_OUTPUT" | sed 's/^/    /'
@@ -465,13 +431,12 @@ VFEOF
     pass "vagrant box list confirms box is removed"
   fi
 
+  section_close
+
   # Cleanup vagrant test artifacts
   rm -rf "$VAGRANT_TEST_HOME" "$VAGRANTFILE_DIR" "$VALID_BOX_DIR" "$VALID_BOX"
 fi
 
-# -------------------------------------------------------
-# Results
-# -------------------------------------------------------
 echo ""
 echo "========================================"
 echo "  Results: $PASSED passed, $FAILED failed"
