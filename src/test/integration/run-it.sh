@@ -65,19 +65,23 @@ assert_status() {
   fi
 }
 
-section_open "Building plugin"
-docker run --rm \
-  -v "$PROJECT_DIR":/build -w /build \
-  maven:3.9-eclipse-temurin-17 \
-  mvn clean package -s /build/.mvn/maven-settings.xml -DskipTests -q
-
 JAR="$PROJECT_DIR/target/nexus-repository-vagrant-1.0.0-SNAPSHOT.jar"
-if [ ! -f "$JAR" ]; then
-  echo "ERROR: Plugin JAR not found at $JAR"
-  exit 1
+if [ -f "$JAR" ]; then
+  echo "Plugin JAR already exists: $(basename "$JAR"), skipping build."
+else
+  section_open "Building plugin"
+  docker run --rm \
+    -v "$PROJECT_DIR":/build -w /build \
+    maven:3.9-eclipse-temurin-17 \
+    mvn clean package -s /build/.mvn/maven-settings.xml -DskipTests -q
+
+  if [ ! -f "$JAR" ]; then
+    echo "ERROR: Plugin JAR not found at $JAR"
+    exit 1
+  fi
+  echo "Plugin JAR built: $(basename "$JAR")"
+  section_close
 fi
-echo "Plugin JAR built: $(basename "$JAR")"
-section_close
 
 section_open "Starting Nexus container"
 docker run -d \

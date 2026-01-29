@@ -28,6 +28,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
+      - name: Cache Nexus Docker image
+        id: cache-nexus-image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/nexus-docker-image.tar
+          key: docker-nexus3-3.75.0
+
+      - name: Pull and save Nexus Docker image
+        if: steps.cache-nexus-image.outputs.cache-hit != 'true'
+        run: docker pull sonatype/nexus3:3.75.0 && docker save sonatype/nexus3:3.75.0 -o /tmp/nexus-docker-image.tar
+
+      - name: Load Nexus Docker image from cache
+        if: steps.cache-nexus-image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/nexus-docker-image.tar
+
       - name: Build plugin JAR
         run: mvn clean package -s .mvn/maven-settings.xml -DskipTests
 
