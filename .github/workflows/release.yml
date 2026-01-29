@@ -29,6 +29,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
+      - name: Set release version from tag
+        run: mvn versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
+
       - name: Build and test
         run: mvn clean verify -s .mvn/maven-settings.xml
 
