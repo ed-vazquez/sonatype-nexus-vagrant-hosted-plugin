@@ -102,3 +102,28 @@ Uses `nexus-testsupport` base classes and Mockito for mocking Nexus internals.
 - All Nexus-provided dependencies use `<scope>provided</scope>` since Nexus supplies them at runtime
 - Checksums are SHA-256, stored as asset attributes
 - The plugin uses the Nexus datastore (SQL) content API, not the legacy Orient storage
+
+## Gotchas & Lessons Learned
+
+### Build
+
+- **Maven settings file is mandatory.** The parent POM (`nexus-plugins:3.75.0-06`) requires a Groovy plugin repository hosted on JFrog Artifactory. Builds without `-s .mvn/maven-settings.xml` will fail with unresolvable dependency errors.
+
+### Integration tests
+
+- **The script builds the plugin itself when run locally** using a Docker Maven container. However, in CI the workflow pre-builds the JAR with `mvn clean package`, and the script detects the existing JAR and skips the redundant Docker build. This saves ~99 seconds in CI. If you change the script, preserve this skip-if-exists logic.
+- **Nexus JVM startup takes ~45 seconds.** This is the floor for integration test duration and cannot be cached or parallelized.
+- **The Nexus Docker image (`sonatype/nexus3:3.75.0`) is ~700MB.** The integration workflow caches it with `docker save`/`docker load` to avoid pulling on every run. If the Nexus version changes, update the cache key in `integration.yml`.
+- **The 13 HTTP tests are stateful and sequential** — uploads must happen before downloads, metadata checks, and deletes. They run in ~1 second total, so parallelizing them would add complexity for no gain.
+- **Vagrant CLI tests are skipped in CI** because `vagrant` is not installed on GitHub runners. The script gracefully detects this and skips. These tests only run locally when `vagrant` is on `$PATH`.
+- **CI log output uses `::group::`/`::endgroup::` workflow commands** (emitted when `CI=true`) to create collapsible sections in the GitHub Actions UI. Locally, the script prints `=== Section ===` headers instead. Failed assertions emit `::error::` annotations that surface in the workflow summary.
+
+### CI/CD
+
+- **Branch protection is enabled on `main`** — the `build` and `integration` checks must pass before merging. Direct pushes by the repo owner are allowed but flagged with a bypass warning.
+- **Release versioning:** the POM has `1.0.0-SNAPSHOT` as its version. The release workflow runs `mvn versions:set` to strip `-SNAPSHOT` and set the version from the git tag (e.g., tag `v1.2.0` → POM version `1.2.0`) before building. This ensures the JAR filename matches the release. The POM in the repo should stay at `-SNAPSHOT`.
+- **Release assets include a sources JAR** because the Maven build produces both `*.jar` and `*-sources.jar` in `target/`, and the release step uploads `target/nexus-repository-vagrant-*.jar` (glob match).
+
+### Plugin deployment
+
+- The plugin JAR is deployed to Nexus by copying it into `$NEXUS_HOME/deploy/`. Nexus picks it up automatically via OSGi hot-deploy on startup. No restart manager config or Karaf console commands are needed.
